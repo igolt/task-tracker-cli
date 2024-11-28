@@ -1,7 +1,7 @@
-tracker-cli: main.go
+task-cli: main.go
 	go build -o $@ $<
 
 clean:
-	rm -f tracker-cli tasks.json
+	rm -f task-cli tasks.json
 
 .PHONY: clean
