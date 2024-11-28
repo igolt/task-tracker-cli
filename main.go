@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 )
 
 const TasksFile = "tasks.json"
 
+// Task status
 const (
 	Todo       = "todo"
 	InProgress = "in-progress"
@@ -40,7 +42,7 @@ func main() {
 	case "update":
 		fmt.Println("update")
 	case "delete":
-		fmt.Println("delete")
+		deleteTaskCommand(cmdArgs)
 	case "mark-in-progress":
 		fmt.Println("mark-in-progress")
 	case "mark-done":
@@ -77,8 +79,7 @@ func getTasks() (map[uint32]Task, error) {
 	}
 
 	var tasks map[uint32]Task
-	err = json.Unmarshal(fileContent, &tasks)
-	if err != nil {
+	if err = json.Unmarshal(fileContent, &tasks); err != nil {
 		return nil, err
 	}
 	return tasks, nil
@@ -117,6 +118,38 @@ func addTaskCommand(cmdArgs []string) {
 	tasks[taskId] = newTask
 	if err := saveTasks(tasks); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli add\": %v\n", err)
+	}
+}
+
+func deleteTaskCommand(cmdArgs []string) {
+	if len(cmdArgs) != 1 {
+		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli delete\" requires exactly one argument")
+		os.Exit(1)
+	}
+
+	parsedCmd, err := strconv.ParseUint(cmdArgs[0], 10, 32)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli delete\": %v\n", err.Error())
+		os.Exit(1)
+	}
+	taskId := uint32(parsedCmd)
+
+	tasks, err := getTasks()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli delete\": %v\n", err)
+		os.Exit(1)
+	}
+
+	task, exists := tasks[taskId]
+	if !exists {
+		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli delete\": task with ID %d does not exists\n", taskId)
+		os.Exit(1)
+	}
+	fmt.Printf("%#v deleted\n", task.Description)
+	delete(tasks, taskId)
+	if err := saveTasks(tasks); err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli delete\": %v\n", err)
+		os.Exit(1)
 	}
 }
 
