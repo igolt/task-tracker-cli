@@ -37,7 +37,7 @@ func main() {
 	case "-h", "--help":
 		printUsage()
 	case "add":
-		addTaskCommand(args[:1])
+		addTaskCommand(args[2:])
 	case "update":
 		fmt.Println("update")
 	case "delete":
@@ -69,7 +69,6 @@ list        List existing tasks
 
 func addTaskCommand(cmdArgs []string) {
 	if len(cmdArgs) != 1 {
-		fmt.Fprintln(os.Stderr,cmdArgs)
 		fmt.Fprintln(os.Stderr, "ERROR: \"task-cli add\" requires exactly one argument")
 		os.Exit(1)
 	}
@@ -87,9 +86,9 @@ func addTaskCommand(cmdArgs []string) {
 		}
 	}
 	taskId := maxId + 1
-	createdAt := time.Now()
+	now := time.Now()
 	newTask := Task{Id: taskId, Description: taskDesc, Status:
-		NotStarted, CreatedAt: createdAt, UpdatedAt: createdAt}
+		NotStarted, CreatedAt: now, UpdatedAt: now}
 	tasks[taskId] = newTask
 	if err := saveTasks(tasks); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli add\": %v", err)
