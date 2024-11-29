@@ -40,7 +40,7 @@ func main() {
 	case "add":
 		addTaskCommand(cmdArgs)
 	case "update":
-		fmt.Println("update")
+		updateTaskCommand(cmdArgs)
 	case "delete":
 		deleteTaskCommand(cmdArgs)
 	case "mark-in-progress":
@@ -62,11 +62,12 @@ Usage: task-cli [OPTIONS] COMMAND [ARG...]
 A command line task manager
 
 Commands:
-
-add         Create new a task
-update      Update an existing task
-delete      Delete a task
-list        List existing tasks`)
+  add                 Create new a task
+  list                List existing tasks
+  update              Update an existing task
+  delete              Delete a task
+  mark-done           Mark a task as done
+  mark-in-progress    Mark a task as in progress`)
 }
 
 func getTasks() (map[uint32]*Task, error) {
@@ -118,7 +119,54 @@ func addTaskCommand(cmdArgs []string) {
 	tasks[taskId] = &newTask
 	if err := saveTasks(tasks); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli add\": %v\n", err)
+		os.Exit(1)
 	}
+}
+
+func updateTaskCommand(cmdArgs []string) {
+	if len(cmdArgs) != 2 {
+		fmt.Fprintln(os.Stderr, "ERROR: \"task-cli update\" requires exactly two arguments")
+		os.Exit(1)
+	}
+
+	taskIdStr, newDesc := cmdArgs[0], cmdArgs[1]
+
+	taskId, err := parseTaskId(taskIdStr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli update\" %v", err)
+		os.Exit(1)
+	}
+
+	tasks, err := getTasks()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli update\" %v", err)
+		os.Exit(1)
+	}
+
+	task, ok := tasks[taskId]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli update\": task with ID %d does not exists\n", taskId)
+		os.Exit(1)
+	}
+
+	oldDesc := task.Description
+	task.Description = newDesc
+	task.UpdatedAt = time.Now()
+
+	if err := saveTasks(tasks); err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli update\": %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Updated: %#v -> %#v\n", oldDesc, newDesc)
+}
+
+func parseTaskId(s string) (uint32, error) {
+	parsedStr, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("invalid task ID %#v", s)
+	}
+	return uint32(parsedStr), nil
 }
 
 func deleteTaskCommand(cmdArgs []string) {
@@ -150,14 +198,6 @@ func deleteTaskCommand(cmdArgs []string) {
 		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli delete\": %v\n", err)
 		os.Exit(1)
 	}
-}
-
-func parseTaskId(s string) (uint32, error) {
-	parsedStr, err := strconv.ParseUint(s, 10, 32)
-	if err != nil {
-		return 0, fmt.Errorf("invalid task ID %#v", s)
-	}
-	return uint32(parsedStr), nil
 }
 
 func markCommand(status string, cmdArgs []string) {
