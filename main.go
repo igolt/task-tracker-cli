@@ -2,13 +2,25 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"time"
 )
 
-const TasksFile = "tasks.json"
+type (
+	TaskId   uint32
+	TasksMap map[TaskId]*Task
+)
+
+type Task struct {
+	Id          TaskId    `json:"id"`
+	Description string    `json:"description"`
+	Status      string    `json:"status"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
 
 // Task status
 const (
@@ -17,13 +29,7 @@ const (
 	Done       = "done"
 )
 
-type Task struct {
-	Id          uint32    `json:"id"`
-	Description string    `json:"description"`
-	Status      string    `json:"status"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
-}
+const TasksFile = "tasks.json"
 
 func main() {
 	args := os.Args
@@ -33,24 +39,31 @@ func main() {
 		return
 	}
 
-	cmdArgs := args[2:]
-	switch command := args[1]; command {
+	var cmd func([]string) error
+	command := args[1]
+	switch command {
 	case "-h", "--help":
 		printUsage()
 	case "add":
-		addTaskCommand(cmdArgs)
+		cmd = addTaskCommand
 	case "update":
-		updateTaskCommand(cmdArgs)
+		cmd = updateTaskCommand
 	case "delete":
-		deleteTaskCommand(cmdArgs)
+		cmd = deleteTaskCommand
 	case "mark-in-progress":
-		markCommand(InProgress, cmdArgs)
+		cmd = markInProgressCommand
 	case "mark-done":
-		markCommand(Done, cmdArgs)
+		cmd = markDoneCommand
 	case "list":
-		listTasksCommand(cmdArgs)
+		cmd = listTasksCommand
 	default:
 		fmt.Fprintf(os.Stderr, "task-cli: invalid command %#v\n", command)
+		os.Exit(1)
+	}
+
+	cmdArgs := args[2:]
+	if err := cmd(cmdArgs); err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli %s\": %v\n", command, err)
 		os.Exit(1)
 	}
 }
@@ -70,23 +83,23 @@ Commands:
   mark-in-progress    Mark a task as in progress`)
 }
 
-func getTasks() (map[uint32]*Task, error) {
+func loadTasks() (TasksMap, error) {
 	fileContent, err := os.ReadFile(TasksFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return make(map[uint32]*Task), nil
+			return make(TasksMap), nil
 		}
 		return nil, err
 	}
 
-	var tasks map[uint32]*Task
+	var tasks TasksMap
 	if err = json.Unmarshal(fileContent, &tasks); err != nil {
 		return nil, err
 	}
 	return tasks, nil
 }
 
-func saveTasks(tasks map[uint32]*Task) error {
+func saveTasks(tasks TasksMap) error {
 	tasksJson, err := json.Marshal(tasks)
 	if err != nil {
 		return err
@@ -94,20 +107,18 @@ func saveTasks(tasks map[uint32]*Task) error {
 	return os.WriteFile(TasksFile, tasksJson, 0644)
 }
 
-func addTaskCommand(cmdArgs []string) {
+func addTaskCommand(cmdArgs []string) error {
 	if len(cmdArgs) != 1 {
-		fmt.Fprintln(os.Stderr, "ERROR: \"task-cli add\" requires exactly one argument")
-		os.Exit(1)
+		return requiresExactlyOneArgumentError()
 	}
 
 	taskDesc := cmdArgs[0]
-	tasks, err := getTasks()
+	tasks, err := loadTasks()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli add\": %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
-	var maxId uint32 = 0
+	var maxId TaskId = 0
 	for id := range tasks {
 		if id > maxId {
 			maxId = id
@@ -117,36 +128,33 @@ func addTaskCommand(cmdArgs []string) {
 	now := time.Now()
 	newTask := Task{Id: taskId, Description: taskDesc, Status: Todo, CreatedAt: now, UpdatedAt: now}
 	tasks[taskId] = &newTask
-	if err := saveTasks(tasks); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli add\": %v\n", err)
-		os.Exit(1)
-	}
+	return saveTasks(tasks)
 }
 
-func updateTaskCommand(cmdArgs []string) {
+func requiresExactlyOneArgumentError() error {
+	return errors.New("exactly one argument is required")
+}
+
+func updateTaskCommand(cmdArgs []string) error {
 	if len(cmdArgs) != 2 {
-		fmt.Fprintln(os.Stderr, "ERROR: \"task-cli update\" requires exactly two arguments")
-		os.Exit(1)
+		return errors.New("exactly two arguments are required")
 	}
 
 	taskIdStr, newDesc := cmdArgs[0], cmdArgs[1]
 
 	taskId, err := parseTaskId(taskIdStr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli update\" %v", err)
-		os.Exit(1)
+		return err
 	}
 
-	tasks, err := getTasks()
+	tasks, err := loadTasks()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli update\" %v", err)
-		os.Exit(1)
+		return err
 	}
 
-	task, ok := tasks[taskId]
-	if !ok {
-		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli update\": task with ID %d does not exists\n", taskId)
-		os.Exit(1)
+	task, err := getTask(tasks, taskId)
+	if err != nil {
+		return err
 	}
 
 	oldDesc := task.Description
@@ -154,108 +162,110 @@ func updateTaskCommand(cmdArgs []string) {
 	task.UpdatedAt = time.Now()
 
 	if err := saveTasks(tasks); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli update\": %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	fmt.Printf("Updated: %#v -> %#v\n", oldDesc, newDesc)
+	return nil
 }
 
-func parseTaskId(s string) (uint32, error) {
+func getTask(tasks TasksMap, taskId TaskId) (*Task, error) {
+	task, ok := tasks[taskId]
+	if ok {
+		return task, nil
+	}
+	return nil, fmt.Errorf("task with ID %d does not exists", taskId)
+}
+
+func parseTaskId(s string) (TaskId, error) {
 	parsedStr, err := strconv.ParseUint(s, 10, 32)
 	if err != nil {
 		return 0, fmt.Errorf("invalid task ID %#v", s)
 	}
-	return uint32(parsedStr), nil
+	return TaskId(parsedStr), nil
 }
 
-func deleteTaskCommand(cmdArgs []string) {
+func deleteTaskCommand(cmdArgs []string) error {
 	if len(cmdArgs) != 1 {
-		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli delete\" requires exactly one argument")
-		os.Exit(1)
+		return requiresExactlyOneArgumentError()
 	}
 
 	taskId, err := parseTaskId(cmdArgs[0])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli delete\": %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
-	tasks, err := getTasks()
+	tasks, err := loadTasks()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli delete\": %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
-	task, exists := tasks[taskId]
-	if !exists {
-		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli delete\": task with ID %d does not exists\n", taskId)
-		os.Exit(1)
+	task, err := getTask(tasks, taskId)
+	if err != nil {
+		return err
 	}
+
 	fmt.Printf("%#v deleted\n", task.Description)
 	delete(tasks, taskId)
-	if err := saveTasks(tasks); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli delete\": %v\n", err)
-		os.Exit(1)
-	}
+	return saveTasks(tasks)
 }
 
-func markCommand(status string, cmdArgs []string) {
+func markCommand(status string, cmdArgs []string) error {
 	if len(cmdArgs) != 1 {
-		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli mark-%s\": requires exactly one argument\n", status)
-		os.Exit(1)
+		return requiresExactlyOneArgumentError()
 	}
 
 	taskId, err := parseTaskId(cmdArgs[0])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli mark-%s\": %v\n", status, err)
-		os.Exit(1)
+		return err
 	}
 
-	tasks, err := getTasks()
+	tasks, err := loadTasks()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli mark-%s\": %v\n", status, err)
-		os.Exit(1)
+		return err
 	}
 
-	task, ok := tasks[taskId]
-	if !ok {
-		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli mark-%s\": task with ID %d does not exists\n", status, taskId)
-		os.Exit(1)
+	task, err := getTask(tasks, taskId)
+	if err != nil {
+		return err
 	}
 
 	if task.Status == status {
+		if status == InProgress {
+			status = "in progress"
+		}
 		fmt.Printf("%#v already %s\n", task.Description, status)
-		return
+		return nil
 	}
-
 	task.Status = status
-	if err := saveTasks(tasks); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli mark-%s\": %v\n", status, err)
-		os.Exit(1)
-	}
+	return saveTasks(tasks)
 }
 
-func listTasksCommand(cmdArgs []string) {
+func markInProgressCommand(cmdArgs []string) error {
+	return markCommand(InProgress, cmdArgs)
+}
+
+func markDoneCommand(cmdArgs []string) error {
+	return markCommand(Done, cmdArgs)
+}
+
+func listTasksCommand(cmdArgs []string) error {
 	statusFilter := ""
 	if len(cmdArgs) > 1 {
-		fmt.Fprintln(os.Stderr, "ERROR: \"task-cli list\" accepts zero or one argument")
-		os.Exit(1)
+		return errors.New("accepts zero or one argument")
 	}
 
 	if len(cmdArgs) == 1 {
 		switch statusFilter = cmdArgs[0]; statusFilter {
 		case Todo, InProgress, Done:
 		default:
-			fmt.Fprintf(os.Stderr, "ERROR: \"task-cli list\": invalid filter %#v\n", statusFilter)
-			os.Exit(1)
+			return fmt.Errorf("invalid filter %#v", statusFilter)
 		}
 	}
 
-	tasks, err := getTasks()
+	tasks, err := loadTasks()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: \"task-cli list\": %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	fmt.Printf("%-10s%-15s%-10s\n", "ID", "STATUS", "DESCRIPTION")
@@ -270,6 +280,7 @@ func listTasksCommand(cmdArgs []string) {
 			}
 		}
 	}
+	return nil
 }
 
 func printTask(task *Task) {
