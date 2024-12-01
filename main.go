@@ -44,6 +44,7 @@ func main() {
 	switch command {
 	case "-h", "--help":
 		printUsage()
+		return
 	case "add":
 		cmd = addTaskCommand
 	case "update":
